@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Come-cocos Devorador B&W</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: #000;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            cursor: default;
+        }
+
+        /* Botón de Inicio */
+        #btn-inicio {
+            padding: 18px 45px;
+            font-size: 1.6rem;
+            color: #000000;
+            background: #ffffff;
+            border: 2px solid #ffffff;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 25px rgba(255, 255, 255, 0.4);
+            z-index: 10;
+        }
+
+        #btn-inicio:hover {
+            background-color: #000000;
+            color: #ffffff;
+            border-color: #ffffff;
+            box-shadow: 0 0 35px rgba(255, 255, 255, 0.8);
+            transform: scale(1.08);
+        }
+
+        /* Controles flotantes */
+        .controles {
+            display: none;
+            position: fixed;
+            top: 25px;
+            right: 25px;
+            gap: 12px;
+            z-index: 20;
+        }
+
+        .btn-control {
+            padding: 10px 22px;
+            font-size: 0.95rem;
+            color: #ffffff;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            border-radius: 30px;
+            backdrop-filter: blur(5px);
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-control:hover {
+            background: #ffffff;
+            color: #000000;
+            transform: scale(1.05);
+        }
+
+        /* Contenedor del lienzo */
+        #canvas-container {
+            display: none;
+            position: absolute;
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Botón de Inicio -->
+    <button id="btn-inicio">Inicio</button>
+
+    <!-- Controles flotantes -->
+    <div class="controles" id="panel-controles">
+        <button class="btn-control" id="btn-audio">🔊 Sonido: ON</button>
+        <button class="btn-control" id="btn-salir">Salir</button>
+    </div>
+
+    <!-- Contenedor del lienzo -->
+    <div id="canvas-container">
+        <canvas id="comecocosCanvas"></canvas>
+    </div>
+
+    <script>
+        const btnInicio = document.getElementById('btn-inicio');
+        const btnSalir = document.getElementById('btn-salir');
+        const btnAudio = document.getElementById('btn-audio');
+        const panelControles = document.getElementById('panel-controles');
+        const canvasContainer = document.getElementById('canvas-container');
+        const canvas = document.getElementById('comecocosCanvas');
+        const ctx = canvas.getContext('2d');
+
+        let animacionId = null;
+        let activo = false;
+
+        // Cuadrícula y Puntos
+        const espaciadoPuntos = 40;
+        let puntos = [];
+        let totalPuntosOriginales = 0;
+
+        // Estado del Come-cocos
+        let pacman = {
+            x: 0,
+            y: 0,
+            radio: 22,
+            anguloBoca: 0.2,
+            velocidadBoca: 0.04,
+            direccionBoca: 1,
+            velocidad: 8,
+            direccion: 0, // 0: derecha, 1: abajo, 2: izquierda, 3: arriba
+            indicePuntoObjetivo: 0
+        };
+
+        let estado = 'comiendo'; // 'comiendo', 'pre_explosion', 'explotando'
+        let temporizadorEstado = 0;
+        let fragmentosExplosion = [];
+
+        // Variables de Audio (Volumen Máximo + Compresor)
+        let audioCtx = null;
+        let audioActivo = true;
+        let masterGain = null;
+        let compresor = null;
+        let tonoWaka = true;
+
+        function ajustarCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+
+        window.addEventListener('resize', () => {
+            if (activo) {
+                ajustarCanvas();
+                reiniciarJuego();
+            }
+        });
+
+        // --- SISTEMA DE AUDIO ARCADE ---
+        function sonidoWaka() {
+            if (!audioActivo || !audioCtx || audioCtx.state !== 'running') return;
+            const t = audioCtx.currentTime;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+
+            osc.type = 'triangle';
+            let freq = tonoWaka ? 440 : 300;
+            tonoWaka = !tonoWaka;
+
+            osc.frequency.setValueAtTime(freq, t);
+            osc.frequency.exponentialRampToValueAtTime(100, t + 0.07);
+
+            gain.gain.setValueAtTime(0.8, t);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+
+            osc.connect(gain);
+            gain.connect(compresor);
+            osc.start(t);
+            osc.stop(t + 0.09);
+        }
+
+        function sonidoExplosion() {
+            if (!audioActivo || !audioCtx || audioCtx.state !== 'running') return;
+            const t = audioCtx.currentTime;
+
+            const bufferSize = audioCtx.sampleRate * 0.5;
+            const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const output = buffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+                output[i] = Math.random() * 2 - 1;
+            }
+
+            const noise = audioCtx.createBufferSource();
+            noise.buffer = buffer;
+
+            const filtro = audioCtx.createBiquadFilter();
+            filtro.type = 'lowpass';
+            filtro.frequency.setValueAtTime(600, t);
+            filtro.frequency.exponentialRampToValueAtTime(40, t + 0.5);
+
+            const gain = audioCtx.createGain();
+            gain.gain.setValueAtTime(1.0, t);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+
+            noise.connect(filtro);
+            filtro.connect(gain);
+            gain.connect(compresor);
+
+            noise.start(t);
+            noise.stop(t + 0.51);
+        }
+
+        function iniciarAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            } else if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+
+            masterGain = audioCtx.createGain();
+            masterGain.gain.setValueAtTime(audioActivo ? 1.0 : 0, audioCtx.currentTime);
+
+            compresor = audioCtx.createDynamicsCompressor();
+            compresor.threshold.setValueAtTime(-12, audioCtx.currentTime);
+            compresor.ratio.setValueAtTime(12, audioCtx.currentTime);
+
+            compresor.connect(masterGain);
+            masterGain.connect(audioCtx.destination);
+        }
+
+        btnAudio.addEventListener('click', () => {
+            audioActivo = !audioActivo;
+            btnAudio.textContent = audioActivo ? "🔊 Sonido: ON" : "🔇 Sonido: OFF";
+            if (masterGain && audioCtx) {
+                masterGain.gain.setValueAtTime(audioActivo ? 1.0 : 0, audioCtx.currentTime);
+            }
+        });
+
+        // --- LÓGICA DEL JUEGO Y MOVIMIENTO ---
+        function reiniciarJuego() {
+            puntos = [];
+            fragmentosExplosion = [];
+            estado = 'comiendo';
+            temporizadorEstado = 0;
+
+            // Generar cuadrícula de puntos ordenada para comer
+            let filas = Math.floor((canvas.height - 100) / espaciadoPuntos);
+            let cols = Math.floor((canvas.width - 100) / espaciadoPuntos);
+            let startX = (canvas.width - (cols - 1) * espaciadoPuntos) / 2;
+            let startY = (canvas.height - (filas - 1) * espaciadoPuntos) / 2;
+
+            // Crear trazado en 'S' (serpenteante) para recorrer limpiamente
+            for (let r = 0; r < filas; r++) {
+                if (r % 2 === 0) {
+                    for (let c = 0; c < cols; c++) {
+                        puntos.push({ x: startX + c * espaciadoPuntos, y: startY + r * espaciadoPuntos, comido: false });
+                    }
+                } else {
+                    for (let c = cols - 1; c >= 0; c--) {
+                        puntos.push({ x: startX + c * espaciadoPuntos, y: startY + r * espaciadoPuntos, comido: false });
+                    }
+                }
+            }
+
+            totalPuntosOriginales = puntos.length;
+
+            if (puntos.length > 0) {
+                pacman.x = puntos[0].x;
+                pacman.y = puntos[0].y;
+                pacman.indicePuntoObjetivo = 0;
+            }
+        }
+
+        function desatarExplosion() {
+            estado = 'explotando';
+            fragmentosExplosion = [];
+
+            // Crear 60 partículas que salen volando desde el centro del Come-cocos
+            for (let i = 0; i < 60; i++) {
+                let angulo = Math.random() * Math.PI * 2;
+                let velocidad = Math.random() * 12 + 4;
+                fragmentosExplosion.push({
+                    x: pacman.x,
+                    y: pacman.y,
+                    vx: Math.cos(angulo) * velocidad,
+                    vy: Math.sin(angulo) * velocidad,
+                    radio: Math.random() * 5 + 2,
+                    opacidad: 1.0
+                });
+            }
+
+            sonidoExplosion();
+        }
+
+        // --- CONTROLES DE LA PÁGINA ---
+        btnInicio.addEventListener('click', () => {
+            btnInicio.style.display = 'none';
+            panelControles.style.display = 'flex';
+            canvasContainer.style.display = 'block';
+
+            ajustarCanvas();
+            reiniciarJuego();
+            activo = true;
+
+            iniciarAudio();
+            iniciarAnimacion();
+        });
+
+        btnSalir.addEventListener('click', () => {
+            activo = false;
+            if (animacionId) cancelAnimationFrame(animacionId);
+
+            canvasContainer.style.display = 'none';
+            panelControles.style.display = 'none';
+            btnInicio.style.display = 'block';
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        });
+
+        // --- BUCLE PRINCIPAL DE ANIMACIÓN ---
+        function iniciarAnimacion() {
+            if (!activo) return;
+
+            // Limpiar fondo negro
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (estado === 'comiendo') {
+                // 1. Dibujar puntos no comidos
+                ctx.fillStyle = '#ffffff';
+                ctx.shadowBlur = 8;
+                ctx.shadowColor = '#ffffff';
+
+                for (let i = 0; i < puntos.length; i++) {
+                    if (!puntos[i].comido) {
+                        ctx.beginPath();
+                        ctx.arc(puntos[i].x, puntos[i].y, 4, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+
+                // 2. Mover Pac-Man hacia el siguiente punto de la secuencia
+                if (pacman.indicePuntoObjetivo < puntos.length) {
+                    let objetivo = puntos[pacman.indicePuntoObjetivo];
+                    let dx = objetivo.x - pacman.x;
+                    let dy = objetivo.y - pacman.y;
+                    let dist = Math.hypot(dx, dy);
+
+                    // Determinar ángulo de orientación para dibujar la boca en la dirección correcta
+                    if (Math.abs(dx) > Math.abs(dy)) {
+                        pacman.direccion = dx > 0 ? 0 : Math.PI;
+                    } else if (Math.abs(dy) > 0) {
+                        pacman.direccion = dy > 0 ? Math.PI / 2 : -Math.PI / 2;
+                    }
+
+                    if (dist < pacman.velocidad) {
+                        pacman.x = objetivo.x;
+                        pacman.y = objetivo.y;
+                        puntos[pacman.indicePuntoObjetivo].comido = true;
+                        pacman.indicePuntoObjetivo++;
+                        sonidoWaka();
+                    } else {
+                        pacman.x += (dx / dist) * pacman.velocidad;
+                        pacman.y += (dy / dist) * pacman.velocidad;
+                    }
+                } else {
+                    // Todos los puntos devorados -> Preparar explosión
+                    estado = 'pre_explosion';
+                    temporizadorEstado = 0;
+                }
+
+                // Animación de abrir y cerrar la boca
+                pacman.anguloBoca += pacman.velocidadBoca * pacman.direccionBoca;
+                if (pacman.anguloBoca > 0.45 || pacman.anguloBoca < 0.05) {
+                    pacman.direccionBoca *= -1;
+                }
+
+                // Dibujar Come-cocos
+                ctx.save();
+                ctx.translate(pacman.x, pacman.y);
+                ctx.rotate(pacman.direccion);
+
+                ctx.beginPath();
+                ctx.arc(0, 0, pacman.radio, pacman.anguloBoca * Math.PI, (2 - pacman.anguloBoca) * Math.PI);
+                ctx.lineTo(0, 0);
+                ctx.closePath();
+
+                ctx.fillStyle = '#ffffff';
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = '#ffffff';
+                ctx.fill();
+
+                ctx.restore();
+
+            } else if (estado === 'pre_explosion') {
+                // Tiembla ligeramente antes de estallar
+                temporizadorEstado++;
+
+                ctx.save();
+                let vibracionX = (Math.random() - 0.5) * 8;
+                let vibracionY = (Math.random() - 0.5) * 8;
+                ctx.translate(pacman.x + vibracionX, pacman.y + vibracionY);
+
+                ctx.beginPath();
+                ctx.arc(0, 0, pacman.radio, 0, Math.PI * 2);
+                ctx.fillStyle = '#ffffff';
+                ctx.shadowBlur = 25;
+                ctx.shadowColor = '#ffffff';
+                ctx.fill();
+                ctx.restore();
+
+                if (temporizadorEstado > 25) {
+                    desatarExplosion();
+                }
+
+            } else if (estado === 'explotando') {
+                // Animación de partículas saliendo volando
+                let quedanFragmentos = false;
+
+                for (let i = 0; i < fragmentosExplosion.length; i++) {
+                    let f = fragmentosExplosion[i];
+
+                    f.x += f.vx;
+                    f.y += f.vy;
+                    f.opacidad -= 0.02;
+
+                    if (f.opacidad > 0) {
+                        quedanFragmentos = true;
+
+                        ctx.beginPath();
+                        ctx.arc(f.x, f.y, f.radio, 0, Math.PI * 2);
+                        ctx.fillStyle = `rgba(255, 255, 255, ${Math.max(0, f.opacidad)})`;
+                        ctx.shadowBlur = 10;
+                        ctx.shadowColor = '#ffffff';
+                        ctx.fill();
+                    }
+                }
+
+                ctx.shadowBlur = 0;
+
+                // Reiniciar el bucle completo cuando termina la explosión
+                if (!quedanFragmentos) {
+                    reiniciarJuego();
+                }
+            }
+
+            animacionId = requestAnimationFrame(iniciarAnimacion);
+        }
+    </script>
+</body>
+</html>
