@@ -115,7 +115,7 @@
 
         // --- CARGA DE TU ARCHIVO DE AUDIO ---
         const miAudio = new Audio('musica2.mp3');
-        miAudio.loop = true; // Para que se repita continuamente en bucle
+        miAudio.loop = true;
 
         // Cuadrícula y Puntos
         const espaciadoPuntos = 40;
@@ -135,7 +135,7 @@
             indicePuntoObjetivo: 0
         };
 
-        let estado = 'comiendo'; // 'comiendo', 'pre_explosion', 'explotando'
+        let estado = 'comiendo';
         let temporizadorEstado = 0;
         let fragmentosExplosion = [];
 
@@ -157,7 +157,6 @@
             btnAudio.textContent = miAudio.muted ? "🔇 Sonido: OFF" : "🔊 Sonido: ON";
         });
 
-        // --- LÓGICA DEL JUEGO Y MOVIMIENTO ---
         function reiniciarJuego() {
             puntos = [];
             fragmentosExplosion = [];
@@ -208,7 +207,7 @@
             }
         }
 
-        // --- CONTROLES DE LA PÁGINA ---
+        // --- CONTROLES DE PÁGINA ---
         btnInicio.addEventListener('click', () => {
             btnInicio.style.display = 'none';
             panelControles.style.display = 'flex';
@@ -218,7 +217,7 @@
             reiniciarJuego();
             activo = true;
 
-            // Iniciar reproducción de la música
+            // Reproducir audio
             miAudio.currentTime = 0;
             miAudio.play().catch(e => console.log("Audio interactivo activado:", e));
 
@@ -229,7 +228,6 @@
             activo = false;
             if (animacionId) cancelAnimationFrame(animacionId);
 
-            // Detener y rebobinar el audio al salir
             miAudio.pause();
             miAudio.currentTime = 0;
 
@@ -240,7 +238,6 @@
             ctx.clearRect(0, 0, canvas.width, canvas.height);
         });
 
-        // --- BUCLE PRINCIPAL DE ANIMACIÓN ---
         function iniciarAnimacion() {
             if (!activo) return;
 
@@ -361,3 +358,4 @@
     </script>
 </body>
 </html>
+
